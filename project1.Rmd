@@ -1,0 +1,325 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r comment=""}
+
+#install.packages("Metrics")
+library(Metrics) # a package for calculating RMSE
+
+# initialization of some data arrays -----------------------------------------  
+
+# time arrays
+Tmin = seq(-3*60,27*60,by=1) # 24*60 minutes in one day
+Thrs = Tmin / 60 # 24 hours
+N  = length(Tmin)
+dT = Tmin[2]-Tmin[1]
+
+# initialize arrays
+G  = rep(0,N)  # initialize, glucose
+I  = rep(0,N)  # initialize, insulin
+dG = rep(0,N)  # initialize, dG/dt
+dI = rep(0,N)  # initialize, dI/dt
+fG = rep(0,N)  # initialize, G intake
+fI = rep(0,N)  # initialize, I injection
+pI = rep(0,N)  # initialize, I infusion
+
+# start values
+G[1] = 120 
+I[1] =  45
+# dG/dt = g0 + g1*G + g2*G*I + fG
+# dI/dt = i1*I + i2*(G/100)^i3 + fI + pI
+
+
+# parameters for simulations -------------------------------------------------
+
+# patient group parameter in dG/dt & dI/dt
+# 5 values in each parameter represent to: no diabetes / type 1 without inj / type 1 with inj / type 1 a.p. param without optim/ type 1 a.p. param with optim
+g0n =  0.93   * rep(1,5)
+g1n = -0.001  * rep(1,5)
+g2n = -0.0002 * rep(1,5)
+i1n = -0.05   * rep(1,5)
+i2n =  c(2.3, 1.0*rep(1,4)) # 2.3 is the value for people without diabetes, and the last four 1.0 represent the value for people with type 1 diabetes.
+i3n =  c(3.0, 1.5*rep(1,4)) # 3.0 is the value for people without diabetes, and the last four 1.5 represent the value for people with type 1 diabetes.
+
+# parameter for randomness
+NP  = 30       # number of random sample for each group
+sed = 3.1416   # random number seed
+std = 0.03    # standard deviation for normal noise
+
+# surge curve (eating): A*(t-t0)^p * e^(-k(t-t0))
+sGA = 150/dT  # surge curve parameters
+sGP = 3.0e-0
+sGK = 5.0e-2
+#sGT = c(7,12,18)*60  # times to eat,three meals 
+sGT = c(7)*60  # times to eat, breakfast
+# glucose surge curve
+for (t in sGT) 
+  {fG = fG + pmax(Tmin*0,(Tmin-t))^sGP*exp(-sGK*pmax(Tmin*0,(Tmin-t)))}
+fG0 = fG * sGA / (sum(fG)/length(sGT))  # normalization
+# surge curve (insulin): A*(t-t0)^p * e^(-k(t-t0))
+sIA = 350/dT    # surge curve parameters
+sIP = 2.5e-0
+sIK = 4.0e-2
+sIT = sGT -10  # times to inject, 10 minutes before meal
+# insulin surge curve
+for (t in sIT) 
+  {fI = fI + pmax(Tmin*0,(Tmin-t))^sIP*exp(-sIK*pmax(Tmin*0,(Tmin-t)))}
+fI0 = fI * sIA / (sum(fI)/length(sIT))  # normalization
+
+# injection & artificial pancreas parameter
+i0n = c(0,0,1,0,0)    # if injection used
+p0n = c(0,0,0,1,1)    # if artificial pancreas used
+p2n = c(0,0,0,1,1.5)  # pI = p2*(G/100)^p3
+p3n = c(0,0,0,1,3.5)  # pI = p2*(G/100)^p3
+
+
+# Simulation of G-I interaction for different groups -------------------------
+
+# data structure to store results for each group of NP samples
+DataSet = list()
+for (k in 1:5) {DataSet[[k]]=list()}
+# Glucose-Insulin dynamics simulation
+for (k in 1:5)
+{
+  set.seed(sed)
+  for (n in 1:NP)
+  {
+    g0 = g0n[k]*rnorm(1,mean=1,sd=std)
+    g1 = g1n[k]*rnorm(1,mean=1,sd=std)
+    g2 = g2n[k]*rnorm(1,mean=1,sd=std)
+    i1 = i1n[k]
+    i2 = i2n[k]
+    i3 = i3n[k]
+    i0 = i0n[k]
+    p0 = p0n[k]
+    p2 = p2n[k]
+    p3 = p3n[k]
+    for (i in 1:(N-1))
+    {
+      fG[i]  = fG0[i]
+      fI[i]  = i0 * fI0[i]
+      pI[i]  = p0 * p2*(G[i]/100)^p3
+      dG[i]  = g0 + g1*G[i] + g2*G[i]*I[max(1,i-10)] + fG[i]
+      dI[i]  = i1*I[i] + i2*(G[i]/100)^i3 + fI[i] + pI[i]
+      G[i+1] = G[i] + dT*dG[i]
+      I[i+1] = I[i] + dT*dI[i]
+    }
+    DataSet[[k]][[n]] = data.frame(G,I,fG,fI,pI)
+  }
+}
+
+
+# Plots for report -----------------------------------------------------------
+
+# Surge curve ==============================================================
+# par(mfrow=c(1,3))    # set the plotting area into a 1*3 array
+#
+plot(Thrs,fG0,col='black',type='l',xlim=c(7,11),ylim=c(0,2),
+     xlab='Time (hr)',ylab='Glucose Intake',cex.lab=1.55)
+plot(Thrs,fI0,col='blue',type='l',xlim=c(7,11),ylim=c(0,4),
+     xlab='Time (hr)',ylab='Insulin Intake',cex.lab=1.55) 
+#cex, plotting the text and symbols be scaled relative to the default.
+# cex.lab, magnification of x and y labels relative to cex
+# cex.axis, magnification of axis annotation relative to cex
+
+# no diabetes / Type I / Injection  ============================================
+# par(mfrow=c(1,3))    # set the plotting area into a 1*3 array
+#
+plot(Thrs,DataSet[[1]][[1]]$G,col='blue',type='l',
+      xlim=c(4,12),ylim=c(90,200),xlab='Time(hr)',ylab='Glucose',
+     cex.lab=1.55)
+lines(Thrs,DataSet[[1]][[1]]$G,col='blue',lty=1)
+lines(Thrs,DataSet[[2]][[1]]$G,col='black',lty=1)
+lines(Thrs,DataSet[[3]][[1]]$G,col='red',lty=1)
+legend("topleft",legend=c("No Diabetes","Untreated","Treatment A"),
+       col=c("blue","black","red"), lty=c(1,1,1),cex=0.9)
+#
+plot( Thrs,DataSet[[1]][[1]]$I,col='blue',type='l',
+      xlim=c(4,12),ylim=c(20,120),xlab='Time (hr)',ylab='Insulin',cex.lab=1.55)
+lines(Thrs,DataSet[[1]][[1]]$I,col='blue',lty=1)
+lines(Thrs,DataSet[[2]][[1]]$I,col='black',lty=1)
+lines(Thrs,DataSet[[3]][[1]]$I,col='red',lty=1)
+legend("topleft",legend=c("No Diabetes","Untreated","Treatment A"),
+       col=c("blue","black","red"), lty=c(1,1,1),cex=0.9)
+#
+plot( DataSet[[1]][[1]]$I[Thrs>0&Thrs<24],
+      DataSet[[1]][[1]]$G[Thrs>0&Thrs<24],
+      col='blue',type='l',xlab='Insulin',ylab='Glucose',
+      xlim=c(20,120),ylim=c(90,200),cex.lab=1.55)
+lines(DataSet[[1]][[1]]$I[Thrs>0&Thrs<24],
+      DataSet[[1]][[1]]$G[Thrs>0&Thrs<24],
+      col='blue',lty=1)
+lines(DataSet[[2]][[1]]$I[Thrs>0&Thrs<24],
+      DataSet[[2]][[1]]$G[Thrs>0&Thrs<24],
+      col='black',lty=1)
+lines(DataSet[[3]][[1]]$I[Thrs>0&Thrs<24],
+      DataSet[[3]][[1]]$G[Thrs>0&Thrs<24],
+      col='red',lty=1)
+legend("topleft",legend=c("No Diabetes","Untreated","Treatment A"),
+       col=c("blue","black","red"), lty=c(1,1,1),cex=0.9)
+
+
+# Variations:  Healthy / Type I / Treatment A  =============================
+
+# par(mfrow=c(1,3))    # set the plotting area into a 1*3 array
+#
+plot( Thrs,DataSet[[1]][[1]]$G,col='blue',type='l',
+      xlim=c(4,12),ylim=c(90,200),xlab='Time (hr)',ylab='Glucose',cex.lab=1.55)
+for (n in 1:NP)
+{
+  lines(Thrs,DataSet[[1]][[n]]$G,col='blue' ,lty=1)
+  lines(Thrs,DataSet[[3]][[n]]$G,col='red'  ,lty=1)
+}
+legend("topleft",legend=c("No Diabetes","Treatment A"),
+       col=c("blue","red"), lty=c(1,1),cex=0.9)
+#
+plot( Thrs,DataSet[[1]][[1]]$I,col='blue',type='l',
+      xlim=c(4,12),ylim=c(20,120),xlab='Time (hr)',ylab='Insulin',cex.lab=1.55)
+for (n in 1:NP)
+{
+  lines(Thrs,DataSet[[1]][[n]]$I,col='blue' ,lty=1)
+  lines(Thrs,DataSet[[3]][[n]]$I,col='red'  ,lty=1)
+}
+legend("topleft",legend=c("No Diabetes","Treatment A"),
+       col=c("blue","red"), lty=c(1,1),cex=0.9)
+#
+plot( DataSet[[1]][[1]]$I[Thrs>12&Thrs<12],
+      DataSet[[1]][[1]]$G[Thrs>12&Thrs<12],
+      col='blue',type='l',xlab='Insulin',ylab='Glucose',
+      xlim=c(20,120),ylim=c(90,200),cex.lab=1.55)
+for (n in 1:NP)
+{
+  lines(DataSet[[1]][[n]]$I[Thrs>4&Thrs<12],
+        DataSet[[1]][[n]]$G[Thrs>4&Thrs<12],
+        col='blue' ,lty=1)
+  lines(DataSet[[3]][[n]]$I[Thrs>4&Thrs<12],
+        DataSet[[3]][[n]]$G[Thrs>4&Thrs<12],
+        col='red'  ,lty=1)
+}
+legend("topleft",legend=c("No Diabetes","Treatment A"),
+       col=c("blue","red"), lty=c(1,1),cex=0.9)
+
+
+# Healthy / Treatment A  / Treatment B - bad param =========================
+
+# par(mfrow=c(1,3))    # set the plotting area into a 1*3 array
+#
+plot( Thrs,DataSet[[1]][[1]]$G,col='blue',type='l',
+      xlim=c(4,12),ylim=c(90,200),xlab='Time (hr)',ylab='Glucose',cex.lab=1.55)
+lines(Thrs,DataSet[[1]][[1]]$G,col='blue' ,lty=1)
+lines(Thrs,DataSet[[3]][[1]]$G,col='red'  ,lty=1)
+lines(Thrs,DataSet[[4]][[1]]$G,col='green',lty=1)
+legend("topleft",legend=c("No Diabetes","Treatment A","Treatment B"),
+       col=c("blue","red","green"), lty=c(1,1,1),cex=0.9)
+#
+plot( Thrs,DataSet[[1]][[1]]$I,col='blue',type='l',
+      xlim=c(4,12),ylim=c(20,120),xlab='Time (hr)',ylab='Insulin',cex.lab=1.55)
+lines(Thrs,DataSet[[1]][[1]]$I,col='blue' ,lty=1)
+lines(Thrs,DataSet[[3]][[1]]$I,col='red'  ,lty=1)
+lines(Thrs,DataSet[[4]][[1]]$I,col='green',lty=1)
+legend("topleft",legend=c("No Diabetes","Treatment A","Treatment B"),
+       col=c("blue","red","green"), lty=c(1,1,1),cex=0.9)
+#
+plot( DataSet[[1]][[1]]$I[Thrs>12&Thrs<12],
+      DataSet[[1]][[1]]$G[Thrs>12&Thrs<12],
+      col='blue',type='l',xlab='Insulin',ylab='Glucose',
+      xlim=c(20,120),ylim=c(90,200),cex.lab=1.55)
+lines(DataSet[[1]][[1]]$I[Thrs>4&Thrs<12],
+      DataSet[[1]][[1]]$G[Thrs>4&Thrs<12],
+      col='blue' ,lty=1)
+lines(DataSet[[3]][[1]]$I[Thrs>4&Thrs<12],
+      DataSet[[3]][[1]]$G[Thrs>4&Thrs<12],
+      col='red'  ,lty=1)
+lines(DataSet[[4]][[1]]$I[Thrs>4&Thrs<12],
+      DataSet[[4]][[1]]$G[Thrs>4&Thrs<12],
+      col='green',lty=1)
+legend("topleft",legend=c("No Diabetes","Treatment A","Treatment B"),
+       col=c("blue","red","green"), lty=c(1,1,1),cex=0.9)
+
+
+# Healthy / Treatment A  / Treatment B - good param =========================
+
+# par(mfrow=c(1,3))    # set the plotting area into a 1*3 array
+#
+plot( Thrs,DataSet[[1]][[1]]$G,col='blue',type='l',
+      xlim=c(4,12),ylim=c(90,200),xlab='Time (hr)',ylab='Glucose',cex.lab=1.55)
+for (n in 1:NP)
+{
+  lines(Thrs,DataSet[[1]][[n]]$G,col='blue' ,lty=1)
+  lines(Thrs,DataSet[[3]][[n]]$G,col='red'  ,lty=1)
+  lines(Thrs,DataSet[[5]][[n]]$G,col='green',lty=1)
+}
+legend("topleft",legend=c("No Diabetes","Treatment A","Treatment B"),
+       col=c("blue","red","green"), lty=c(1,1,1),cex=0.9)
+#
+plot( Thrs,DataSet[[1]][[1]]$I,col='blue',type='l',
+      xlim=c(4,12),ylim=c(20,120),xlab='Time (hr)',ylab='Insulin',cex.lab=1.55)
+for (n in 1:NP)
+{
+  lines(Thrs,DataSet[[1]][[n]]$I,col='blue' ,lty=1)
+  lines(Thrs,DataSet[[3]][[n]]$I,col='red'  ,lty=1)
+  lines(Thrs,DataSet[[5]][[n]]$I,col='green',lty=1)
+}
+legend("topleft",legend=c("No Diabetes","Treatment A","Treatment B"),
+       col=c("blue","red","green"), lty=c(1,1,1),cex=0.9)
+#
+plot( DataSet[[1]][[1]]$I[Thrs>12&Thrs<12],
+      DataSet[[1]][[1]]$G[Thrs>12&Thrs<12],
+      col='blue',type='l',xlab='Insulin',ylab='Glucose',
+      xlim=c(20,120),ylim=c(90,200),cex.lab=1.55)
+for (n in 1:NP)
+{
+  lines(DataSet[[1]][[n]]$I[Thrs>4&Thrs<12],
+        DataSet[[1]][[n]]$G[Thrs>4&Thrs<12],
+        col='blue' ,lty=1)
+  lines(DataSet[[3]][[n]]$I[Thrs>4&Thrs<12],
+        DataSet[[3]][[n]]$G[Thrs>4&Thrs<12],
+        col='red'  ,lty=1)
+  lines(DataSet[[5]][[n]]$I[Thrs>4&Thrs<12],
+        DataSet[[5]][[n]]$G[Thrs>4&Thrs<12],
+        col='green',lty=1)
+}
+legend("topleft",legend=c("No Diabetes","Treatment A","Treatment B"),
+       col=c("blue","red","green"), lty=c(1,1,1),cex=0.9)
+
+
+# optimize for p2 & p3 
+g_target = rep(100,N)  # initialize, target value of glucose
+p2_range = seq (0.5,2.0,by=0.1) # p2 starts from 0.5 to 2.0, increases by 0.1
+p3_range = seq (0.5,3.5,by=0.1) # p3 starts from 0.5 to 3.5, increases by 0.1
+p2_result = rep(0,length(p2_range))
+min_value = 10000 # the minimal RMSE value
+idx_p2 = -1
+idx_p3 = -1
+n = 0
+  for (k in p2_range)
+  {
+    n = n+1
+    m = 0
+    for (j in p3_range)
+    {
+      m = m+1
+      for (i in 1:(N-1)) # N=length(Tmin)
+      {
+        pI[i]  = k*(G[i]/100)^j
+        dG[i]  = 0.93*rnorm(1,mean=1,sd=std)-0.001*rnorm(1,mean=1,sd=std)*G[i] -0.0002*rnorm(1,mean=1,sd=std)*G[i]*I[max(1,i-10)] + fG[i]
+        dI[i]  = 0 -0.05*I[i] + 1*(G[i]/100)^1.5 + pI[i]
+        G[i+1] = G[i] + dT*dG[i]
+        I[i+1] = I[i] + dT*dI[i]
+      }
+      p2_result[m] = rmse(G,g_target) # Calculating RMSE using rmse(actual, predicted), where actual is the ground truth numeric vector
+    }
+    if (min(p2_result)<min_value)
+    {
+      min_value = min(p2_result)
+      idx_p2 = n
+      idx_p3 = which.min(p2_result)
+    }
+  }
+p2_range[idx_p2]
+p3_range[idx_p3]
+
+```
+
