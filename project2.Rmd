@@ -1,0 +1,118 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r comment=""}
+setwd("C:/YY/Study/EMU/Course/Winter 2021/MATH 519 Stochastic Math Modeling_Ross/Project/Project 2/Data") # get working directory
+rm(list=ls())  # remove all data in environment
+wind <- read.delim("wind_data.txt", header=TRUE) # read the training data: the first 23 months in 2007-2008
+wind$date <- strptime(wind$date,format="%m/%d/%Y %H:%M") 
+wind_last <- read.delim("wind_lastmonth.txt", header=TRUE) # read the test data: the last month in 2008
+wind_last$date <- strptime(wind_last$date,format="%m/%d/%Y %H:%M") 
+wind_full <- read.delim("wind_full.txt", header=TRUE) # read all the raw data: total 24 months in 2007-2008
+wind_full$date <- strptime(wind_full$date,format="%m/%d/%Y %H:%M") 
+N = length(wind$ws) 
+M = length(wind_last$ws)
+L = length(wind_full$ws)
+
+# graph the raw data------------------------------------------------------------
+plot(wind$date,wind$ws,type ='l',xlab="Time",ylab="Wind Speed(m/s)",main="Plot of Original Data") # graph the training data
+
+# Frequency Analysis-------------------------------------------------------------
+## Method1: Spectrum
+# wind$t = seq(1,N)
+# ampl = wind$t * 0
+# 
+# for (i in seq(1:(N/4)))
+#  {
+#    model_sine = lm(ws ~ t + sin(i*2*pi*t/N) + cos(i*2*pi*t/N), wind)
+#    A = model_sine$coefficients[3]
+#    B = model_sine$coefficients[4]
+#    ampl[i] = sqrt(A^2+B^2)
+#  }
+#  plot(seq(1:N)/N*24,ampl,type="l",xlab="Frequency(cycles/day)",ylab="abs(Amplitude)",main="Spectrum",xlim=c(0,10), ylim=c(0,1.2))
+
+## Method2: Fourier Analysis:
+wind$t = seq(1,N)
+y = fft(wind$ws, inverse = FALSE) # Fast Discrete Fourier Transform (FFT)
+y = Mod(y[2:(N/2)]) # Modulo Operator
+F = seq(1,(N/2-1))/N*24   # freq
+
+plot(F,y,type="l",xlab="Freq (1/day) ",ylab="Amplitude",xlim=c(00,6000/N*24),main="Fourier Analysis")
+#plot(F,y,type="b",xlab="Freq (1/day) ",ylab="Amplitude",xlim=c(00,50/N*24),main="Fourier Analysis") 
+
+
+# Deterministic model ---------------------------------------------------------
+freq = c(1/(365*24), 1/24, 1/12, 1/8, 1/6, 5/24, 1/4)   # sine & cosine
+ws_mean = mean(wind$ws)  # mean 
+wind$ws_m = wind$ws - ws_mean   # raw data - mean = centered data
+model = lm(ws_m ~ sin(freq[1]*2*pi*t) + cos(freq[1]*2*pi*t)
+                + sin(freq[2]*2*pi*t) + cos(freq[2]*2*pi*t)
+                + sin(freq[3]*2*pi*t) + cos(freq[3]*2*pi*t)
+                + sin(freq[4]*2*pi*t) + cos(freq[4]*2*pi*t) 
+                + sin(freq[5]*2*pi*t) + cos(freq[5]*2*pi*t) 
+                + sin(freq[6]*2*pi*t) + cos(freq[6]*2*pi*t)
+                + sin(freq[7]*2*pi*t) + cos(freq[7]*2*pi*t), wind)
+summary(model)
+
+# Due to high P-value, we delete freq = 1/(365*24), 5/24, 1/4, and fit a new model:
+freq = c(1/24, 1/12, 1/8, 1/6)   # sine & cosine
+modelnew = lm(ws_m ~ sin(freq[1]*2*pi*t) + cos(freq[1]*2*pi*t)
+                   + sin(freq[2]*2*pi*t) + cos(freq[2]*2*pi*t)
+                   + sin(freq[3]*2*pi*t) + cos(freq[3]*2*pi*t)
+                   + sin(freq[4]*2*pi*t) + cos(freq[4]*2*pi*t), wind)
+summary(modelnew)
+plot(modelnew$residuals, type="l")
+
+# Get the residuals:Xt--------------------------------------------------------------------------
+wind$Xt = modelnew$residuals
+
+# Check stationary of residuals----------------------------------------------------------------
+#install.packages("tseries")
+library(tseries)
+adf.test(wind$Xt) # The augmented Dickey-Fuller (ADF) test is a formal statistical test for stationary. The null hypothesis assumes that the series is non-stationary. ADF procedure tests whether the change in Y can be explained by lagged value and a linear trend. If contribution of the lagged value to the change in Y is non-significant and there is a presence of a trend component, the series is non-stationary and null hypothesis will not be rejected. Our p-value is 0.01, accept the alternative hypothesis: stationary
+
+# ARIMA Model----------------------------------------------------------------
+library(forecast)
+fit <- Arima(wind$Xt, order=c(2,0,1))
+fit$coef
+plot(wind$Xt,type='l',ylab="Xt (m/s)", xlab="Time (hour)",xlim=c(1000,3000), main = "The fitted value vs the residuals X_t")
+lines(fit$fitted,col='red') 
+
+# Check adequacy of ARIMA Model 
+acf(fit$residuals,xlim = c(1,20),ylim = c(-0.025,0.025),main = 'ACF for Differenced Series')
+pacf(fit$residuals,xlim = c(1,20),ylim = c(-0.025,0.025),main = 'ACF for Differenced Series')
+
+# Predict----------------------------------------------------------------
+pred = M*0 # Initialize predicted value, M = length(wind_last$ws)
+time = seq(1,L) # L = length(wind_full$ws)
+stoch_ws = wind_full$ws - ws_mean - ( modelnew$coefficients[2]*sin(pi*time/12) + modelnew$coefficients[3]*cos(pi*time/12)
+                                    + modelnew$coefficients[4]*sin(pi*time/6) + modelnew$coefficients[5]*cos(pi*time/6)
+                                    + modelnew$coefficients[6]*sin(pi*time/4) + modelnew$coefficients[7]*cos(pi*time/4)
+                                    + modelnew$coefficients[8]*sin(pi*time/3) + modelnew$coefficients[9]*cos(pi*time/3)
+                                    + modelnew$coefficients[1])
+full_residual = c(fit$residuals,seq(0,0,length.out = 744)) # initialize residuals in 24 months: residuals in training model + 744 residuals in test model
+
+for (i in seq(1:M)) # M = length(wind_last$ws)
+ {
+  
+  tmp = fit$coef[1]*stoch_ws[N+i-1] + fit$coef[2]*stoch_ws[N+i-2] + fit$coef[3]*full_residual[N+i-1] # 1-step-ahead prediction of stochastic component X_t is X_t(1) = E_t(X_(t+1)) = 0.750625*X_t + 0.120219*X_(t-1) + 0.307025*a_t
+     
+  pred[i] = (tmp + ws_mean + modelnew$coefficients[2]*sin(pi*(N+i)/12) + modelnew$coefficients[3]*cos(pi*(N+i)/12)
+                           + modelnew$coefficients[4]*sin(pi*(N+i)/6) + modelnew$coefficients[5]*cos(pi*(N+i)/6)
+                           + modelnew$coefficients[6]*sin(pi*(N+i)/4) + modelnew$coefficients[7]*cos(pi*(N+i)/4)
+                           + modelnew$coefficients[8]*sin(pi*(N+i)/3) + modelnew$coefficients[9]*cos(pi*(N+i)/3)
+                           + modelnew$coefficients[1]) # Prediction model = Stochastic component + Deterministic component
+
+  full_residual[N+i] = stoch_ws[N+i] - tmp
+}
+
+plot(pred, type="l", xlab="December 2008",ylab="Wind Speed",main="Predicted Values vs Observed Values" ) #plot predicted values 
+lines(wind_last$ws,col='red') # plot observed values
+
+plot(wind_last$ws-pred, type="l", xlab="December 2008",ylab="Residuals",main="Predicted Residuals" ) # residuals = observed values - Predicted values
+
+RMSE = sqrt(sum((wind_last$ws-pred)^2)/M) # Root Mean Square Error (RMSE) is the standard deviation of the residuals (prediction errors). Residuals are a measure of how far from the regression line data points are; RMSE is a measure of how spread out these residuals are. In other words, it tells us how concentrated the data is around the line of best fit. 
+
+```
